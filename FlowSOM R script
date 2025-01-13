@@ -1,16 +1,7 @@
-# Script for synthesis of compound samples from csv and appliaction of FlowSom upon compound
-# 2019-11-26 checked
-
-### increment of 50000 for sample tag is good for BC Navios csv files (i.e. 20 bit). 
-# Allows 20 samples within normal range of 2E20. Change to 12000 for BD canto data
-
-### German settings: csv must contain ";" as separator. For US settings change definitions of separator ","
-
-### Before running the script the working directory containing the input files 
-# needs to be set. In RStudio, chose Session > Set Working Directory > to Project Directory
-
-### A results folder "in-out" and Subfolder "Results" needs to be created.
-### starting csv are to be placed in "in-out".
+# Script for synthesis of compound sample from multiple csv and application of 
+# FlowSom upon this compound, then remapping of an additional file onto these nodes
+# (optional: tSNE on raw data, only useful for up to 100,000 events)
+# tested 2020-12-20 working
 
 library(flowCore)
 library(FlowSOM)
@@ -21,27 +12,46 @@ library(scales)
 library(spatstat)
 library(data.table)
 
+##################### settings ####################
 
-##################################################################################
-#(not necessary if data in defined folder) 
-# This section should be changed by the user for analysis of different files
-# Set working directory to where the files are stored
+### minimum two csv needed. does not work with single file. 
+
+### Before running the script the working directory containing the input files 
+# needs to be set. In RStudio, chose Session > Set Working Directory > to Project Directory
+
+### A results folder "in-out" and 2 Subfolder "Results" and "Remap files" needs to be created. 
+### csv for primary clustering are to be placed in "in-out" 
+### file of interest to appear first in alphabet, before controls
+### csv for file to be remapped to be placed in "Remap files"
+### csv: define "read.csv" (english) or "read.csv2" (german) to define separator 
+
+#Just for my convience 
 setwd("C:/Users/oisin/Desktop/Analysis Data/Flow. (Krause)/Flow-cytometry/Flow-cytometry")
+
+
+###Set the maximum value of parameters (Navios 2E20-1, BD Canto 2E18-1, Sysmex 2E8-1)
+parametermax <- 1048575
+# tagincrement (to accomodate 20 samples)
+tagincrement <- parametermax/22 
+tagincrement <- round (tagincrement, 0)
 
 #Set the marker columns of the file to be used for clustering
 ClusterCols <- (1:11)
 # clusternumber is the square root of the number of clusters
 clusternumber <- 10
 
-#Set the factor by which the number of samples in a node will multipled by
+### Set the factor by which the number of samples in a FlowSom node will multipled by
 #Changes the size of the nodes. (Multiplier) * sqrt(Number of samples in node)
-tSNE <- 0.3
-MST <- 0.001
+# will be modified by adation in script
+tSNE_nodesize <- 0.06
+MST_nodesize <- 0.003
+Grid_nodesize <- 0.04
 
 ############# create compound dataset from csv ##########################
 
 #Create list of input files
 list_of_input_files = list.files(path = "./in-out", pattern = ".csv", full.names = TRUE)
+list_of_input_short <- list.files(path = "./in-out", pattern = ".csv", full.names = FALSE)
 
 #Get number of input files
 number_of_input_files = length(list_of_input_files)
@@ -113,9 +123,9 @@ fSOM <- FlowSOM::BuildSOM(fSOM, colsToUse = ClusterCols, xdim=clusternumber, ydi
 fSOM <- FlowSOM::BuildMST(fSOM, tSNE = TRUE)
 
 #Plotting the results
-PlotStars(fSOM, view = "MST")
-PlotStars(fSOM, view = "tSNE")
-PlotStars(fSOM, view = "grid")
+#PlotStars(fSOM, view = "MST")
+#PlotStars(fSOM, view = "tSNE")
+#PlotStars(fSOM, view = "grid")
 
 #Write the MST coordinates to fcs file
 ResultsTable <- as.data.frame(fSOM$data)
@@ -124,39 +134,67 @@ fileNames <- vector(length = nrow(ResultsTable))
 
 ResultsTable$Mapping <- fSOM$map$mapping[,1]
 
-#Add distribution effect to coordinates 
+#Get Flowsom coordinates and add distribution effect
+#Node size
 info <- ResultsTable %>% 
   group_by(Mapping) %>%
-  dplyr::summarise(count = n()) 
+  summarise(count = n()) 
 
+max_node_size <- max(info,2)
+
+#MST
 info2 <- fSOM$MST$l %>% 
   as.data.frame() %>%
   setNames(c("MST_dim_x", "MST_dim_y")) %>%
   rownames_to_column("Mapping") %>%
   mutate(Mapping = as.numeric(Mapping))
 
+MST_range <- max(info2[2:3])-min(info2[2:3])
+MST_nodesize <- 0.12/sqrt(max_node_size)*MST_range/clusternumber
+
+#MST12 is tSNE table inside flowsom
 info3 <- fSOM$MST$l2 %>% 
   as.data.frame() %>%
   setNames(c("tSNE_dim_x", "tSNE_dim_y")) %>%
   rownames_to_column("Mapping") %>%
   mutate(Mapping = as.numeric(Mapping))
 
+tSNE_range <- max(info3[2:3])-min(info3[2:3])
+tSNE_nodesize <- 0.2/sqrt(max_node_size)*tSNE_range/clusternumber
+
+#grid information
+info4 <- fSOM$map$grid %>% 
+  as.data.frame() %>%
+  setNames(c("grid_x", "grid_y")) %>%
+  rownames_to_column("Mapping") %>%
+  mutate(Mapping = as.numeric(Mapping))
+
+Grid_nodesize <- 0.45/sqrt(max_node_size)
+
 MSTmerge <- merge(info, info2, by = "Mapping")
 tSNEMerge <- merge(info, info3, by = "Mapping")
+GridMerge <- merge(info, info4, by = "Mapping")
 
 #Generate random coordinates
 MSTFunt <- function(x, output){
   count = x[2]
-  rRad = MST * sqrt(x[2]) 
+  rRad = MST_nodesize * sqrt(x[2]) 
   xCord = x[3]
   yCord = x[4]
   runifdisc(count, radius = rRad, centre=c(xCord, yCord), drop = FALSE)
 }
 
-#Generate random coordinates
 tSNEFunt <- function(x, output){
   count = x[2]
-  rRad = tSNE * sqrt(x[2]) 
+  rRad = tSNE_nodesize * sqrt(x[2]) 
+  xCord = x[3]
+  yCord = x[4]
+  runifdisc(count, radius = rRad, centre=c(xCord, yCord), drop = FALSE)
+}
+
+GridFunt <- function(x, output){
+  count = x[2]
+  rRad = Grid_nodesize * sqrt(x[2]) 
   xCord = x[3]
   yCord = x[4]
   runifdisc(count, radius = rRad, centre=c(xCord, yCord), drop = FALSE)
@@ -164,6 +202,7 @@ tSNEFunt <- function(x, output){
 
 MstCoords <- apply(MSTmerge, 1, MSTFunt)
 tSNECoords <- apply(tSNEMerge, 1, tSNEFunt)
+GridCoords <- apply(GridMerge, 1, GridFunt)
 
 splitter <- function(x, output){
   list = x
@@ -173,7 +212,8 @@ splitter <- function(x, output){
 
 mOutCoords <- lapply(MstCoords, splitter)
 tOutCoords <- lapply(tSNECoords, splitter)
-
+gOutCoords <- lapply(GridCoords, splitter)
+                     
 mAllCoords <- rbindlist(mOutCoords, idcol = "index")
 names(mAllCoords)[1] <- "Mapping"
 names(mAllCoords)[2] <- "MST_dim_x"
@@ -184,10 +224,15 @@ names(tAllCoords)[1] <- "Mapping"
 names(tAllCoords)[2] <- "tSNE_dim_x"
 names(tAllCoords)[3] <- "tSNE_dim_y"
 
+gAllCoords <- rbindlist(gOutCoords, idcol = "index")
+names(gAllCoords)[1] <- "Mapping"
+names(gAllCoords)[2] <- "Grid_dim_x"
+names(gAllCoords)[3] <- "Grid_dim_y"
+
 #Merging data requires large amount of memory. Ordering then binding uses significantly less
 ResultsTable <- ResultsTable[order(ResultsTable$Mapping),]
 
-AllCoords <- cbind(mAllCoords[,2:3], tAllCoords[,2:3])
+AllCoords <- cbind(mAllCoords[,2:3], tAllCoords[,2:3], gAllCoords[,2:3])
 
 ResultsTable <- cbind(ResultsTable, AllCoords)
 
@@ -195,6 +240,12 @@ ResultsTable <- cbind(ResultsTable, AllCoords)
 CellCount <- ResultsTable %>% 
   group_by(Mapping, sample) %>% 
   dplyr::summarise(count = n())
+
+ControlMix <- CellCount
+
+CellCount <- group_by(CellCount, Mapping) %>% 
+  mutate(percent = count/sum(count))
+
 #Cell count D only
 CellCount <- CellCount[CellCount$sample %in% c(50000), c(1:3)]
 #Some nodes have no D cells
@@ -210,15 +261,30 @@ names(CellCount)[3] <- "Count D"
 ResultsTable <- left_join(ResultsTable, CellCount[,c(1,3,4,5)], by = c("Mapping"))
 ResultsTable[is.na(ResultsTable)] <- 0
 
-#Scale and shift the data to positive (Not recommended, this will alter structure of graphs and data)
-ResultsTable$MST_dim_x <- scales::rescale(ResultsTable$MST_dim_x, to = c(0, 1000000))
-ResultsTable$MST_dim_y <- scales::rescale(ResultsTable$MST_dim_y, to = c(0, 1000000))
-ResultsTable$tSNE_dim_x <- scales::rescale(ResultsTable$tSNE_dim_x, to = c(0, 1000000))
-ResultsTable$tSNE_dim_y <- scales::rescale(ResultsTable$tSNE_dim_y, to = c(0, 1000000))
+#Select all non-AML samples
+ControlMix <- ControlMix[ControlMix$sample %in% unique(ControlMix$sample)[-1], c(1:3)]
 
-ResultsTable$Mapping <- scales::rescale(ResultsTable$Mapping, to = c(0, 1000000))
-ResultsTable$count <- scales::rescale(ResultsTable$count, to = c(0, 1000000))
-ResultsTable$percent <- scales::rescale(ResultsTable$percent, to = c(0, 1000000))
+#Group by mapping and find percentage of each sample
+ControlPer <- ControlMix %>% 
+  group_by(Mapping) %>% 
+  dplyr::summarise(count = sum(count))
+names(ControlPer)[2] <- "Total Count"
+ControlMix <- merge(ControlMix, ControlPer, by = "Mapping")
+ControlMix$PercentControl <- ControlMix$count/ControlMix$`Total Count` * 100
+
+#Scale and shift the data to positive (this will alter structure of graphs and data)
+ResultsTable$MST_dim_x <- scales::rescale(ResultsTable$MST_dim_x, to = c(0, parametermax))
+ResultsTable$MST_dim_y <- scales::rescale(ResultsTable$MST_dim_y, to = c(0, parametermax))
+ResultsTable$tSNE_dim_x <- scales::rescale(ResultsTable$tSNE_dim_x, to = c(0, parametermax))
+ResultsTable$tSNE_dim_y <- scales::rescale(ResultsTable$tSNE_dim_y, to = c(0, parametermax))
+ResultsTable$Grid_dim_x <- scales::rescale(ResultsTable$Grid_dim_x, to = c(0, parametermax))
+ResultsTable$Grid_dim_y <- scales::rescale(ResultsTable$Grid_dim_y, to = c(0, parametermax))
+# ResultsTable$rawSNE1 <- scales::rescale(ResultsTable$rawSNE1, to = c(0, parametermax))
+# ResultsTable$rawSNE2 <- scales::rescale(ResultsTable$rawSNE2, to = c(0, parametermax))
+
+ResultsTable$Mapping <- scales::rescale(ResultsTable$Mapping, to = c(0, parametermax))
+ResultsTable$count <- scales::rescale(ResultsTable$count, to = c(0, parametermax))
+ResultsTable$percent <- scales::rescale(ResultsTable$percent, to = c(0, parametermax))
 
 
 ############ Convert the dataframe to fcs ##############
@@ -318,11 +384,15 @@ input_data.ff <- new("flowFrame",
                      description=description_list
 )
 
+# option 1: filename according to date
 fcsfilename <- paste0("./in-out/Results/", Sys.Date(), "_Clustered.fcs")
+
+# option 2: filename according to original name
+#fcsfilename <- paste0("./in-out/Results/", list_of_input_short[1], "_FlowSom.fcs")
 
 ## Save flowframe as .fcs file
 #write.FCS(input_data.ff, fcsfilename, endian = "little")
-
+#write.csv2(list_of_input_short, "./in-out/Results/files_list.csv",row.names = FALSE)
 
 #The new dataframe will be produced as a separate FCS file
 #Remap new data and compare with the previous AML sample
@@ -350,31 +420,28 @@ RemapfileNames <- vector(length = nrow(RemapResultsTable))
 
 RemapResultsTable$Mapping <- Remapped$map$mapping[,1]
 
-#Add distribution effect to coordinates 
+#Mapping table from new data
 Remapinfo <- RemapResultsTable %>% 
   group_by(Mapping) %>%
-  dplyr::summarise(count = n()) 
+  summarise(count = n()) 
 
-Remapinfo2 <- Remapped$MST$l %>% 
-  as.data.frame() %>%
-  setNames(c("MST_dim_x", "MST_dim_y")) %>%
-  rownames_to_column("Mapping") %>%
-  mutate(Mapping = as.numeric(Mapping))
+RemapMSTmerge <- merge(Remapinfo, info2, by = "Mapping")
+RemaptSNEMerge <- merge(Remapinfo, info3, by = "Mapping")
+RemapGridMerge <- merge(Remapinfo, info4, by = "Mapping")
 
-Remapinfo3 <- Remapped$MST$l2 %>% 
-  as.data.frame() %>%
-  setNames(c("tSNE_dim_x", "tSNE_dim_y")) %>%
-  rownames_to_column("Mapping") %>%
-  mutate(Mapping = as.numeric(Mapping))
+RemapResultsTable <- as.data.frame(Remapped$data)
+RemapfileLabels <- Remapped$metaData %>% unlist() %>% matrix(ncol = 2, byrow = T)
+RemapfileNames <- vector(length = nrow(RemapResultsTable))
 
-RemapMSTmerge <- merge(Remapinfo, Remapinfo2, by = "Mapping")
-RemaptSNEMerge <- merge(Remapinfo, Remapinfo3, by = "Mapping")
+RemapResultsTable$Mapping <- Remapped$map$mapping[,1]
 
 RemapMstCoords <- apply(RemapMSTmerge, 1, MSTFunt)
 RemaptSNECoords <- apply(RemaptSNEMerge, 1, tSNEFunt)
+RemapGridCoords <- apply(RemapGridMerge, 1, GridFunt)
 
 RemapmOutCoords <- lapply(RemapMstCoords, splitter)
 RemaptOutCoords <- lapply(RemaptSNECoords, splitter)
+RemapgOutCoords <- lapply(RemapGridCoords, splitter)
 
 RemapmAllCoords <- rbindlist(RemapmOutCoords, idcol = "index")
 names(RemapmAllCoords)[1] <- "Mapping"
@@ -386,10 +453,15 @@ names(RemaptAllCoords)[1] <- "Mapping"
 names(RemaptAllCoords)[2] <- "tSNE_dim_x"
 names(RemaptAllCoords)[3] <- "tSNE_dim_y"
 
+RemapgAllCoords <- rbindlist(RemapgOutCoords, idcol = "index")
+names(RemapgAllCoords)[1] <- "Mapping"
+names(RemapgAllCoords)[2] <- "grid_dim_x"
+names(RemapgAllCoords)[3] <- "grid_dim_y"
+
 #Merging data requires large amount of memory. Ordering then binding uses significantly less
 RemapResultsTable <- RemapResultsTable[order(RemapResultsTable$Mapping),]
 
-RemapAllCoords <- cbind(RemapmAllCoords[,2:3], RemaptAllCoords[,2:3])
+RemapAllCoords <- cbind(RemapmAllCoords[,2:3], RemaptAllCoords[,2:3], RemapgAllCoords[,2:3])
 
 RemapResultsTable <- cbind(RemapResultsTable, RemapAllCoords)
 
@@ -399,9 +471,14 @@ RemapCellCount <- RemapResultsTable %>%
   dplyr::summarise(count = n())
 names(RemapCellCount)[2] <- "Count FU"
 
-OriginalSample <- CellCount[CellCount$sample %in% c(50000),c(1:5)]
+OriginalSample <- CellCount[CellCount$sample %in% c(50000),c(1,3,5)]
 
 RemapCellCount <- left_join(RemapCellCount, OriginalSample, by = c("Mapping"))
+
+#Add the data to the Control mix
+ControlFUMix <- merge(ControlMix, RemapCellCount[, c(1:4)], by = "Mapping")
+#Order the dataframe by the Percent D
+ControlFUMix <- ControlFUMix[order(ControlFUMix$PercentD, decreasing = TRUE),]
 
 #Calculate fold change
 RemapCellCount <- mutate(RemapCellCount, FoldChange = `Count D`/`Count FU`)
@@ -410,16 +487,19 @@ RemapCellCount <- mutate(RemapCellCount, FoldChange = `Count D`/`Count FU`)
 RemapResultsTable <- left_join(RemapResultsTable, RemapCellCount, by = c("Mapping"))
 
 #Scale and shift the data to positive (Not recommended, this will alter structure of graphs and data)
-RemapResultsTable$MST_dim_x <- scales::rescale(RemapResultsTable$MST_dim_x, to = c(0, 1000000))
-RemapResultsTable$MST_dim_y <- scales::rescale(RemapResultsTable$MST_dim_y, to = c(0, 1000000))
-RemapResultsTable$tSNE_dim_x <- scales::rescale(RemapResultsTable$tSNE_dim_x, to = c(0, 1000000))
-RemapResultsTable$tSNE_dim_y <- scales::rescale(RemapResultsTable$tSNE_dim_y, to = c(0, 1000000))
-RemapResultsTable$Mapping <- scales::rescale(RemapResultsTable$Mapping, to = c(0, 1000000))
-RemapResultsTable$`Count FU` <- scales::rescale(RemapResultsTable$`Count FU`, to = c(0, 1000000))
-RemapResultsTable$`Count D` <- scales::rescale(RemapResultsTable$`Count D`, to = c(0, 1000000))
-RemapResultsTable$PercentD <- scales::rescale(RemapResultsTable$PercentD, to = c(0, 1000000))
-RemapResultsTable$FoldChange <- scales::rescale(RemapResultsTable$FoldChange, to = c(0, 1000000))
-RemapResultsTable$`Total Count` <- scales::rescale(RemapResultsTable$`Total Count`, to = c(0, 1000000))
+RemapResultsTable$MST_dim_x <- scales::rescale(RemapResultsTable$MST_dim_x, to = c(0, parametermax))
+RemapResultsTable$MST_dim_y <- scales::rescale(RemapResultsTable$MST_dim_y, to = c(0, parametermax))
+RemapResultsTable$tSNE_dim_x <- scales::rescale(RemapResultsTable$tSNE_dim_x, to = c(0, parametermax))
+RemapResultsTable$tSNE_dim_y <- scales::rescale(RemapResultsTable$tSNE_dim_y, to = c(0, parametermax))
+RemapResultsTable$grid_dim_x <- scales::rescale(RemapResultsTable$grid_dim_x, to = c(0, parametermax))
+RemapResultsTable$grid_dim_y <- scales::rescale(RemapResultsTable$grid_dim_y, to = c(0, parametermax))
+
+RemapResultsTable$Mapping <- scales::rescale(RemapResultsTable$Mapping, to = c(0, parametermax))
+RemapResultsTable$RemapCount <- scales::rescale(RemapResultsTable$RemapCount, to = c(0, parametermax))
+RemapResultsTable$OriginalCount <- scales::rescale(RemapResultsTable$OriginalCount, to = c(0, parametermax))
+RemapResultsTable$OriginalPercent <- scales::rescale(RemapResultsTable$OriginalPercent, to = c(0, parametermax))
+
+RemapResultsTable$FoldChange <- scales::rescale(RemapResultsTable$FoldChange, to = c(0, parametermax))
 
 ############ Convert the dataframe to fcs ##############
 input_data <- data.matrix(RemapResultsTable)  
@@ -518,10 +598,22 @@ input_data.ff <- new("flowFrame",
                      description=description_list
 )
 
-fcsfilename <- paste0("./in-out/Remap files/Results/(KO_H1 2017_1568)_Ctrl_Remap_Clustered.fcs")
+#Option 1 name by date processed
+fcsfilename <- paste0("./in-out/Remap files/Results/Control Remapping/", "ER_000001_H1 (KO_H1 2017-855)", "_Remap_Clustered.fcs")
+csvfilename <- paste0("./in-out/Remap files/Results/Control Remapping/", "ER_000001_H1 (KO_H1 2017-855)", "_MixingData.csv")
+
+#Option 2: filename according to original name
+#fcsfilename <- paste0("./in-out/Results/", list_of_input_short[1], "_FlowSom_remap.fcs")
+#csvfilename <- paste0("./in-out/Results/", list_of_input_short[1], "_MixingData.csv")
 
 ## Save flowframe as .fcs file
 write.FCS(input_data.ff, fcsfilename, endian = "little")
 
-## Save flowframe as .fcs file
-write.FCS(input_data.ff, fcsfilename, endian = "little")
+## Output the control mixing data as separate file
+write.csv(ControlFUMix, csvfilename)
+
+###################################################################################
+
+#Control in FU sample 
+#Gating in R or Kaluza
+#Randomise the samples during input
