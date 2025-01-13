@@ -330,11 +330,12 @@ fcsfilename <- paste0("./in-out/Results/", Sys.Date(), "_Clustered.fcs")
 remap_file = list.files(path = "./in-out/Remap files", pattern = ".csv", full.names = TRUE)
 
 remap_temp <- read.csv2(file = remap_file, header = TRUE, check.names = FALSE)
-
-remap_temp2 <- as.data.frame(remap_temp)
+remap_temp <- as.data.frame(remap_temp)
+columns <- colnames(compound_control)
+colnames(remap_temp) <- columns[1:12]
 
 #Convert the dataframe to a matrix
-ReFrame <- data.matrix(remap_temp2)
+ReFrame <- data.matrix(remap_temp)
 
 #Import file as flowFrame
 Remapfcs <- flowCore::flowFrame(ReFrame)
@@ -414,10 +415,11 @@ RemapResultsTable$MST_dim_y <- scales::rescale(RemapResultsTable$MST_dim_y, to =
 RemapResultsTable$tSNE_dim_x <- scales::rescale(RemapResultsTable$tSNE_dim_x, to = c(0, 1000000))
 RemapResultsTable$tSNE_dim_y <- scales::rescale(RemapResultsTable$tSNE_dim_y, to = c(0, 1000000))
 RemapResultsTable$Mapping <- scales::rescale(RemapResultsTable$Mapping, to = c(0, 1000000))
-RemapResultsTable$RemapCount <- scales::rescale(RemapResultsTable$RemapCount, to = c(0, 1000000))
-RemapResultsTable$OriginalCount <- scales::rescale(RemapResultsTable$OriginalCount, to = c(0, 1000000))
-RemapResultsTable$OriginalPercent <- scales::rescale(RemapResultsTable$OriginalPercent, to = c(0, 1000000))
+RemapResultsTable$`Count FU` <- scales::rescale(RemapResultsTable$`Count FU`, to = c(0, 1000000))
+RemapResultsTable$`Count D` <- scales::rescale(RemapResultsTable$`Count D`, to = c(0, 1000000))
+RemapResultsTable$PercentD <- scales::rescale(RemapResultsTable$PercentD, to = c(0, 1000000))
 RemapResultsTable$FoldChange <- scales::rescale(RemapResultsTable$FoldChange, to = c(0, 1000000))
+RemapResultsTable$`Total Count` <- scales::rescale(RemapResultsTable$`Total Count`, to = c(0, 1000000))
 
 ############ Convert the dataframe to fcs ##############
 input_data <- data.matrix(RemapResultsTable)  
@@ -516,7 +518,10 @@ input_data.ff <- new("flowFrame",
                      description=description_list
 )
 
-fcsfilename <- paste0("./in-out/Remap files/Results/", Sys.Date(), " _(T1)_Ctrl_Remap_Clustered.fcs")
+fcsfilename <- paste0("./in-out/Remap files/Results/(KO_H1 2017_1568)_Ctrl_Remap_Clustered.fcs")
+
+## Save flowframe as .fcs file
+write.FCS(input_data.ff, fcsfilename, endian = "little")
 
 ## Save flowframe as .fcs file
 write.FCS(input_data.ff, fcsfilename, endian = "little")
