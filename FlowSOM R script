@@ -1,0 +1,516 @@
+# Script for synthesis of compound samples from csv and appliaction of FlowSom upon compound
+# 2019-11-26 checked
+
+### increment of 50000 for sample tag is good for BC Navios csv files (i.e. 20 bit). 
+# Allows 20 samples within normal range of 2E20. Change to 12000 for BD canto data
+
+### German settings: csv must contain ";" as separator. For US settings change definitions of separator ","
+
+### Before running the script the working directory containing the input files 
+# needs to be set. In RStudio, chose Session > Set Working Directory > to Project Directory
+
+### A results folder "in-out" and Subfolder "Results" needs to be created.
+### starting csv are to be placed in "in-out".
+
+library(flowCore)
+library(FlowSOM)
+library(dplyr)
+library(tibble)
+library(Biobase)
+library(scales)
+library(spatstat)
+library(data.table)
+
+
+##################################################################################
+#(not necessary if data in defined folder) 
+# This section should be changed by the user for analysis of different files
+# Set working directory to where the files are stored
+setwd("C:/Users/oisin/Desktop/Analysis Data/Flow. (Krause)/Flow-cytometry/Flow-cytometry")
+
+#Set the marker columns of the file to be used for clustering
+ClusterCols <- (1:11)
+# clusternumber is the square root of the number of clusters
+clusternumber <- 10
+
+#Set the factor by which the number of samples in a node will multipled by
+#Changes the size of the nodes. (Multiplier) * sqrt(Number of samples in node)
+tSNE <- 0.3
+MST <- 0.001
+
+############# create compound dataset from csv ##########################
+
+#Create list of input files
+list_of_input_files = list.files(path = "./in-out", pattern = ".csv", full.names = TRUE)
+
+#Get number of input files
+number_of_input_files = length(list_of_input_files)
+compound_control = NULL
+
+#Import first csv-file
+i <- 1
+input_temp <- read.csv2(file = list_of_input_files[i], header = TRUE, check.names = FALSE)
+
+#Calculating the amount of rows and coloumns of the data matrix
+input_temp_row_numbers <- nrow(input_temp)
+input_temp_col_numbers <- ncol(input_temp)
+
+#Defining identifier for first sample
+a <- i * 50000
+sample <- rep(a, length.out = input_temp_row_numbers)
+
+#Adding a coloumn for sample identifier to data input
+input_temp <- cbind(input_temp, sample)
+compound_control <- input_temp
+
+# coloumn name of first sample
+names_control <- colnames(compound_control)
+
+#For-loop to load a growing number of datasets and merge these datasets 
+for(i in 2:number_of_input_files) 
+  
+{
+  input_temp = NULL
+  
+  #Import an additional .csv-file
+  input_temp <- read.csv2(file = list_of_input_files[i], header = TRUE, check.names = FALSE)
+  
+  #Check coloumn names and amounts and unify them
+  coloumn_names_input_temp <- colnames(input_temp)
+  
+  #Calculating the amount of rows and coloumns of the data matrix
+  input_temp_row_numbers <- nrow(input_temp)
+  input_temp_col_numbers <- ncol(input_temp)
+  
+  #Defining identyfier for each sample
+  a <- i * 50000
+  sample <- rep(a, length.out = input_temp_row_numbers)
+  
+  #Adding a coloumn for sample identifier to data input
+  input_temp <- cbind(input_temp, sample)
+  
+  # merge control and input, check for identity
+  inputnames <- names(input_temp)
+  names_control <- cbind(names_control, inputnames)
+  names(input_temp) <- names(compound_control) # input1 column names are retained
+  
+  #Adding data of current iteration to data of previous iteration(s)
+  compound_control <- rbind(compound_control, input_temp)
+}
+
+############### FlowSOM clustering section ###############
+
+#Convert the dataframe to a matrix
+DataFrame <- data.matrix(compound_control)
+
+#Import file as flowFrame
+filefcs <- flowCore::flowFrame(DataFrame)
+
+#Run FlowSOM. The seed allow reproduction of results
+set.seed(234)
+fSOM <- FlowSOM::ReadInput(filefcs, transform = FALSE, scale = FALSE)
+fSOM <- FlowSOM::BuildSOM(fSOM, colsToUse = ClusterCols, xdim=clusternumber, ydim=clusternumber)
+fSOM <- FlowSOM::BuildMST(fSOM, tSNE = TRUE)
+
+#Plotting the results
+PlotStars(fSOM, view = "MST")
+PlotStars(fSOM, view = "tSNE")
+PlotStars(fSOM, view = "grid")
+
+#Write the MST coordinates to fcs file
+ResultsTable <- as.data.frame(fSOM$data)
+fileLabels <- fSOM$metaData %>% unlist() %>% matrix(ncol = 2, byrow = T)
+fileNames <- vector(length = nrow(ResultsTable))
+
+ResultsTable$Mapping <- fSOM$map$mapping[,1]
+
+#Add distribution effect to coordinates 
+info <- ResultsTable %>% 
+  group_by(Mapping) %>%
+  summarise(count = n()) 
+
+info2 <- fSOM$MST$l %>% 
+  as.data.frame() %>%
+  setNames(c("MST_dim_x", "MST_dim_y")) %>%
+  rownames_to_column("Mapping") %>%
+  mutate(Mapping = as.numeric(Mapping))
+
+info3 <- fSOM$MST$l2 %>% 
+  as.data.frame() %>%
+  setNames(c("tSNE_dim_x", "tSNE_dim_y")) %>%
+  rownames_to_column("Mapping") %>%
+  mutate(Mapping = as.numeric(Mapping))
+
+MSTmerge <- merge(info, info2, by = "Mapping")
+tSNEMerge <- merge(info, info3, by = "Mapping")
+
+#Generate random coordinates
+MSTFunt <- function(x, output){
+  count = x[2]
+  rRad = MST * sqrt(x[2]) 
+  xCord = x[3]
+  yCord = x[4]
+  runifdisc(count, radius = rRad, centre=c(xCord, yCord), drop = FALSE)
+}
+
+#Generate random coordinates
+tSNEFunt <- function(x, output){
+  count = x[2]
+  rRad = tSNE * sqrt(x[2]) 
+  xCord = x[3]
+  yCord = x[4]
+  runifdisc(count, radius = rRad, centre=c(xCord, yCord), drop = FALSE)
+}
+
+MstCoords <- apply(MSTmerge, 1, MSTFunt)
+tSNECoords <- apply(tSNEMerge, 1, tSNEFunt)
+
+splitter <- function(x, output){
+  list = x
+  
+  as.data.frame(cbind(x[["Simulation 1"]][["x"]],x[["Simulation 1"]][["y"]]))
+}
+
+mOutCoords <- lapply(MstCoords, splitter)
+tOutCoords <- lapply(tSNECoords, splitter)
+
+mAllCoords <- rbindlist(mOutCoords, idcol = "index")
+names(mAllCoords)[1] <- "Mapping"
+names(mAllCoords)[2] <- "MST_dim_x"
+names(mAllCoords)[3] <- "MST_dim_y"
+
+tAllCoords <- rbindlist(tOutCoords, idcol = "index")
+names(tAllCoords)[1] <- "Mapping"
+names(tAllCoords)[2] <- "tSNE_dim_x"
+names(tAllCoords)[3] <- "tSNE_dim_y"
+
+#Merging data requires large amount of memory. Ordering then binding uses significantly less
+ResultsTable <- ResultsTable[order(ResultsTable$Mapping),]
+
+AllCoords <- cbind(mAllCoords[,2:3], tAllCoords[,2:3])
+
+ResultsTable <- cbind(ResultsTable, AllCoords)
+
+#Count the number of each cell in the different groups
+CellCount <- ResultsTable %>% 
+  group_by(Mapping, sample) %>% 
+  summarise(count = n())
+
+CellCount <- group_by(CellCount, Mapping) %>% 
+  mutate(percent = count/sum(count))
+
+ResultsTable <- left_join(ResultsTable, CellCount, by = c("Mapping", "sample"))
+
+#Scale and shift the data to positive (Not recommended, this will alter structure of graphs and data)
+ResultsTable$MST_dim_x <- scales::rescale(ResultsTable$MST_dim_x, to = c(0, 1000000))
+ResultsTable$MST_dim_y <- scales::rescale(ResultsTable$MST_dim_y, to = c(0, 1000000))
+ResultsTable$tSNE_dim_x <- scales::rescale(ResultsTable$tSNE_dim_x, to = c(0, 1000000))
+ResultsTable$tSNE_dim_y <- scales::rescale(ResultsTable$tSNE_dim_y, to = c(0, 1000000))
+
+ResultsTable$Mapping <- scales::rescale(ResultsTable$Mapping, to = c(0, 1000000))
+ResultsTable$count <- scales::rescale(ResultsTable$count, to = c(0, 1000000))
+ResultsTable$percent <- scales::rescale(ResultsTable$percent, to = c(0, 1000000))
+
+
+############ Convert the dataframe to fcs ##############
+input_data <- data.matrix(ResultsTable)
+
+# Estimate vector of column names
+column_names = dimnames(input_data)[[2]]
+
+# Estimate number of columns and rows of 'input_data'
+number_of_columns_input_data = ncol(input_data)
+number_of_rows_input_data = nrow(input_data)
+
+# Generate flowframe subsets based on .csv file data (varMetadata, data,)
+# varMetadata
+row_names_varMetadata = c('name', 'desc', 'range', 'minRange', 'maxRange')
+labelDescription <- c('Name of Parameter', 'Description of Parameter', 'Range of Parameter', 'Minimum Parameter Value after Transformation', 'Maximum Parameter Value after Transformation')
+varMetadata <- as.data.frame(labelDescription, row.names = row_names_varMetadata)
+
+# data
+# Create row names vector for data list
+row_Names_data_list = NULL
+for (i in 1:number_of_columns_input_data) {
+  
+  row_Names_data_list[i] = paste0("$P",i)
+}
+
+# Create 'name'
+name = column_names
+name = I(name)
+names(name) = row_Names_data_list
+
+# Create 'desc'
+desc = vector(mode="character", length=number_of_columns_input_data)
+for (i in 1:number_of_columns_input_data) {
+  
+  desc[i] = NA
+}
+desc = I(desc)
+
+# Create 'range'
+range = vector(mode="double", length=number_of_columns_input_data)
+for (i in 1:number_of_columns_input_data) {
+  
+  range[i] = 1048576
+}
+
+# Create 'minRange'
+minRange = vector(mode="double", length = number_of_columns_input_data)
+minValues_input_data = apply(input_data,2,min)
+for (i in 1:number_of_columns_input_data) {
+  
+  minRange[i] = minValues_input_data[i]
+}
+
+# Create 'maxRange'
+maxRange = vector(mode="double", length = number_of_columns_input_data)
+for (i in 1:number_of_columns_input_data) {
+  
+  maxRange[i] = 1048575
+}
+
+col_names_data = c('name', 'desc', 'range', 'minRange', 'maxRange')
+
+data_info = list(name, desc, range, minRange, maxRange)
+data_info = as.data.frame(data_info, col.names = col_names_data, row.names = row_Names_data_list)
+
+# Create dimLabels
+dimLabels = c("rowNames", "columnNames")
+
+# Create description list
+description_list_names = NULL
+description_list_values = NULL
+
+for (i in 1:number_of_columns_input_data) {
+  
+  description_list_names[i*5-4] = paste0("$P",i,"B")
+  description_list_names[i*5-3] = paste0("$P",i,"E")
+  description_list_names[i*5-2] = paste0("$P",i,"N")
+  description_list_names[i*5-1] = paste0("$P",i,"R")
+  description_list_names[i*5-0] = paste0("$P",i,"S")
+  
+  description_list_values[i*5-4] = as.character(32)
+  description_list_values[i*5-3] = as.character('0,0')
+  description_list_values[i*5-2] = column_names[i]
+  description_list_values[i*5-1] = as.character(1048576)
+  description_list_values[i*5-0] = as.character(' ')
+  
+}
+
+description_list = as.list(description_list_values, row.names = description_list_names)
+names(description_list) = description_list_names
+
+## Create flowframe
+input_data.ff <- new("flowFrame",
+                     exprs=input_data,
+                     parameters=AnnotatedDataFrame(data = data_info, varMetadata = varMetadata),
+                     description=description_list
+)
+
+fcsfilename <- paste0("./in-out/Results/", Sys.Date(), "_Clustered.fcs")
+
+## Save flowframe as .fcs file
+#write.FCS(input_data.ff, fcsfilename, endian = "little")
+
+
+#The new dataframe will be produced as a separate FCS file
+#Remap new data and compare with the previous AML sample
+#Create list of input files
+remap_file = list.files(path = "./in-out/Remap files", pattern = ".csv", full.names = TRUE)
+
+remap_temp <- read.csv2(file = remap_file[1], header = TRUE, check.names = FALSE)
+
+#Convert the dataframe to a matrix
+ReFrame <- data.matrix(remap_temp)
+
+#Import file as flowFrame
+Remapfcs <- flowCore::flowFrame(ReFrame)
+
+#Map the new data onto the original map
+Remapped <- FlowSOM::NewData(fSOM, Remapfcs)
+
+
+#Write the MST coordinates to fcs file
+RemapResultsTable <- as.data.frame(Remapped$data)
+RemapfileLabels <- Remapped$metaData %>% unlist() %>% matrix(ncol = 2, byrow = T)
+RemapfileNames <- vector(length = nrow(RemapResultsTable))
+
+RemapResultsTable$Mapping <- Remapped$map$mapping[,1]
+
+#Add distribution effect to coordinates 
+Remapinfo <- RemapResultsTable %>% 
+  group_by(Mapping) %>%
+  summarise(count = n()) 
+
+Remapinfo2 <- Remapped$MST$l %>% 
+  as.data.frame() %>%
+  setNames(c("MST_dim_x", "MST_dim_y")) %>%
+  rownames_to_column("Mapping") %>%
+  mutate(Mapping = as.numeric(Mapping))
+
+Remapinfo3 <- Remapped$MST$l2 %>% 
+  as.data.frame() %>%
+  setNames(c("tSNE_dim_x", "tSNE_dim_y")) %>%
+  rownames_to_column("Mapping") %>%
+  mutate(Mapping = as.numeric(Mapping))
+
+RemapMSTmerge <- merge(Remapinfo, Remapinfo2, by = "Mapping")
+RemaptSNEMerge <- merge(Remapinfo, Remapinfo3, by = "Mapping")
+
+RemapMstCoords <- apply(RemapMSTmerge, 1, MSTFunt)
+RemaptSNECoords <- apply(RemaptSNEMerge, 1, tSNEFunt)
+
+RemapmOutCoords <- lapply(RemapMstCoords, splitter)
+RemaptOutCoords <- lapply(RemaptSNECoords, splitter)
+
+RemapmAllCoords <- rbindlist(RemapmOutCoords, idcol = "index")
+names(RemapmAllCoords)[1] <- "Mapping"
+names(RemapmAllCoords)[2] <- "MST_dim_x"
+names(RemapmAllCoords)[3] <- "MST_dim_y"
+
+RemaptAllCoords <- rbindlist(RemaptOutCoords, idcol = "index")
+names(RemaptAllCoords)[1] <- "Mapping"
+names(RemaptAllCoords)[2] <- "tSNE_dim_x"
+names(RemaptAllCoords)[3] <- "tSNE_dim_y"
+
+#Merging data requires large amount of memory. Ordering then binding uses significantly less
+RemapResultsTable <- RemapResultsTable[order(RemapResultsTable$Mapping),]
+
+RemapAllCoords <- cbind(RemapmAllCoords[,2:3], RemaptAllCoords[,2:3])
+
+RemapResultsTable <- cbind(RemapResultsTable, RemapAllCoords)
+
+#Compare the remapped sample with the known AML sample
+RemapCellCount <- RemapResultsTable %>% 
+              group_by(Mapping) %>% 
+              summarise(count = n())
+names(RemapCellCount)[2] <- "RemapCount"
+
+OriginalSample <- CellCount[CellCount$sample %in% c(50000),c(1,3,4)]
+names(OriginalSample)[2] <- "OriginalCount"
+names(OriginalSample)[3] <- "OriginalPercent"
+
+RemapCellCount <- left_join(RemapCellCount, OriginalSample, by = c("Mapping"))
+
+#Calculate fold change
+RemapCellCount <- mutate(RemapCellCount, FoldChange = OriginalCount / RemapCount)
+
+#Add the calculations to the data 
+RemapResultsTable <- left_join(RemapResultsTable, RemapCellCount, by = c("Mapping"))
+
+#Scale and shift the data to positive (Not recommended, this will alter structure of graphs and data)
+RemapResultsTable$MST_dim_x <- scales::rescale(RemapResultsTable$MST_dim_x, to = c(0, 1000000))
+RemapResultsTable$MST_dim_y <- scales::rescale(RemapResultsTable$MST_dim_y, to = c(0, 1000000))
+RemapResultsTable$tSNE_dim_x <- scales::rescale(RemapResultsTable$tSNE_dim_x, to = c(0, 1000000))
+RemapResultsTable$tSNE_dim_y <- scales::rescale(RemapResultsTable$tSNE_dim_y, to = c(0, 1000000))
+
+RemapResultsTable$Mapping <- scales::rescale(RemapResultsTable$Mapping, to = c(0, 1000000))
+RemapResultsTable$RemapCount <- scales::rescale(RemapResultsTable$RemapCount, to = c(0, 1000000))
+RemapResultsTable$OriginalCount <- scales::rescale(RemapResultsTable$OriginalCount, to = c(0, 1000000))
+RemapResultsTable$OriginalPercent <- scales::rescale(RemapResultsTable$OriginalPercent, to = c(0, 1000000))
+
+RemapResultsTable$FoldChange <- scales::rescale(RemapResultsTable$FoldChange, to = c(0, 1000000))
+
+############ Convert the dataframe to fcs ##############
+input_data <- data.matrix(RemapResultsTable)  
+                   
+# Estimate vector of column names
+column_names = dimnames(input_data)[[2]]
+
+# Estimate number of columns and rows of 'input_data'
+number_of_columns_input_data = ncol(input_data)
+number_of_rows_input_data = nrow(input_data)
+
+# Generate flowframe subsets based on .csv file data (varMetadata, data,)
+# varMetadata
+row_names_varMetadata = c('name', 'desc', 'range', 'minRange', 'maxRange')
+labelDescription <- c('Name of Parameter', 'Description of Parameter', 'Range of Parameter', 'Minimum Parameter Value after Transformation', 'Maximum Parameter Value after Transformation')
+varMetadata <- as.data.frame(labelDescription, row.names = row_names_varMetadata)
+
+# data
+# Create row names vector for data list
+row_Names_data_list = NULL
+for (i in 1:number_of_columns_input_data) {
+  
+  row_Names_data_list[i] = paste0("$P",i)
+}
+
+# Create 'name'
+name = column_names
+name = I(name)
+names(name) = row_Names_data_list
+
+# Create 'desc'
+desc = vector(mode="character", length=number_of_columns_input_data)
+for (i in 1:number_of_columns_input_data) {
+  
+  desc[i] = NA
+}
+desc = I(desc)
+
+# Create 'range'
+range = vector(mode="double", length=number_of_columns_input_data)
+for (i in 1:number_of_columns_input_data) {
+  
+  range[i] = 1048576
+}
+
+# Create 'minRange'
+minRange = vector(mode="double", length = number_of_columns_input_data)
+minValues_input_data = apply(input_data,2,min)
+for (i in 1:number_of_columns_input_data) {
+  
+  minRange[i] = minValues_input_data[i]
+}
+
+# Create 'maxRange'
+maxRange = vector(mode="double", length = number_of_columns_input_data)
+for (i in 1:number_of_columns_input_data) {
+  
+  maxRange[i] = 1048575
+}
+
+col_names_data = c('name', 'desc', 'range', 'minRange', 'maxRange')
+
+data_info = list(name, desc, range, minRange, maxRange)
+data_info = as.data.frame(data_info, col.names = col_names_data, row.names = row_Names_data_list)
+
+# Create dimLabels
+dimLabels = c("rowNames", "columnNames")
+
+# Create description list
+description_list_names = NULL
+description_list_values = NULL
+
+for (i in 1:number_of_columns_input_data) {
+  
+  description_list_names[i*5-4] = paste0("$P",i,"B")
+  description_list_names[i*5-3] = paste0("$P",i,"E")
+  description_list_names[i*5-2] = paste0("$P",i,"N")
+  description_list_names[i*5-1] = paste0("$P",i,"R")
+  description_list_names[i*5-0] = paste0("$P",i,"S")
+  
+  description_list_values[i*5-4] = as.character(32)
+  description_list_values[i*5-3] = as.character('0,0')
+  description_list_values[i*5-2] = column_names[i]
+  description_list_values[i*5-1] = as.character(1048576)
+  description_list_values[i*5-0] = as.character(' ')
+  
+}
+
+description_list = as.list(description_list_values, row.names = description_list_names)
+names(description_list) = description_list_names
+
+## Create flowframe
+input_data.ff <- new("flowFrame",
+                     exprs=input_data,
+                     parameters=AnnotatedDataFrame(data = data_info, varMetadata = varMetadata),
+                     description=description_list
+)
+
+fcsfilename <- paste0("./in-out/Remap files/Results/", Sys.Date(), "_Remap_Clustered.fcs")
+
+## Save flowframe as .fcs file
+write.FCS(input_data.ff, fcsfilename, endian = "little")
