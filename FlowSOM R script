@@ -127,7 +127,7 @@ ResultsTable$Mapping <- fSOM$map$mapping[,1]
 #Add distribution effect to coordinates 
 info <- ResultsTable %>% 
   group_by(Mapping) %>%
-  summarise(count = n()) 
+  dplyr::summarise(count = n()) 
 
 info2 <- fSOM$MST$l %>% 
   as.data.frame() %>%
@@ -194,12 +194,21 @@ ResultsTable <- cbind(ResultsTable, AllCoords)
 #Count the number of each cell in the different groups
 CellCount <- ResultsTable %>% 
   group_by(Mapping, sample) %>% 
-  summarise(count = n())
+  dplyr::summarise(count = n())
+#Cell count D only
+CellCount <- CellCount[CellCount$sample %in% c(50000), c(1:3)]
+#Some nodes have no D cells
+Dnodes <- CellCount$Mapping
+infoSelected <- info[info$Mapping %in% Dnodes,]
+names(infoSelected)[2] <- "Total Count"
 
-CellCount <- group_by(CellCount, Mapping) %>% 
-  mutate(percent = count/sum(count))
-
-ResultsTable <- left_join(ResultsTable, CellCount, by = c("Mapping", "sample"))
+CellCount <- merge(CellCount, infoSelected, by = "Mapping")
+#Calculate percentage of D in node (Excluding the FU sample)
+CellCount$PercentD <- CellCount$count/CellCount$`Total Count` * 100
+names(CellCount)[3] <- "Count D"
+#Merge the data
+ResultsTable <- left_join(ResultsTable, CellCount[,c(1,3,4,5)], by = c("Mapping"))
+ResultsTable[is.na(ResultsTable)] <- 0
 
 #Scale and shift the data to positive (Not recommended, this will alter structure of graphs and data)
 ResultsTable$MST_dim_x <- scales::rescale(ResultsTable$MST_dim_x, to = c(0, 1000000))
@@ -320,17 +329,18 @@ fcsfilename <- paste0("./in-out/Results/", Sys.Date(), "_Clustered.fcs")
 #Create list of input files
 remap_file = list.files(path = "./in-out/Remap files", pattern = ".csv", full.names = TRUE)
 
-remap_temp <- read.csv2(file = remap_file[1], header = TRUE, check.names = FALSE)
+remap_temp <- read.csv2(file = remap_file, header = TRUE, check.names = FALSE)
+
+remap_temp2 <- as.data.frame(remap_temp)
 
 #Convert the dataframe to a matrix
-ReFrame <- data.matrix(remap_temp)
+ReFrame <- data.matrix(remap_temp2)
 
 #Import file as flowFrame
 Remapfcs <- flowCore::flowFrame(ReFrame)
 
 #Map the new data onto the original map
 Remapped <- FlowSOM::NewData(fSOM, Remapfcs)
-
 
 #Write the MST coordinates to fcs file
 RemapResultsTable <- as.data.frame(Remapped$data)
@@ -342,7 +352,7 @@ RemapResultsTable$Mapping <- Remapped$map$mapping[,1]
 #Add distribution effect to coordinates 
 Remapinfo <- RemapResultsTable %>% 
   group_by(Mapping) %>%
-  summarise(count = n()) 
+  dplyr::summarise(count = n()) 
 
 Remapinfo2 <- Remapped$MST$l %>% 
   as.data.frame() %>%
@@ -384,18 +394,16 @@ RemapResultsTable <- cbind(RemapResultsTable, RemapAllCoords)
 
 #Compare the remapped sample with the known AML sample
 RemapCellCount <- RemapResultsTable %>% 
-              group_by(Mapping) %>% 
-              summarise(count = n())
-names(RemapCellCount)[2] <- "RemapCount"
+  group_by(Mapping) %>% 
+  dplyr::summarise(count = n())
+names(RemapCellCount)[2] <- "Count FU"
 
-OriginalSample <- CellCount[CellCount$sample %in% c(50000),c(1,3,4)]
-names(OriginalSample)[2] <- "OriginalCount"
-names(OriginalSample)[3] <- "OriginalPercent"
+OriginalSample <- CellCount[CellCount$sample %in% c(50000),c(1:5)]
 
 RemapCellCount <- left_join(RemapCellCount, OriginalSample, by = c("Mapping"))
 
 #Calculate fold change
-RemapCellCount <- mutate(RemapCellCount, FoldChange = OriginalCount / RemapCount)
+RemapCellCount <- mutate(RemapCellCount, FoldChange = `Count D`/`Count FU`)
 
 #Add the calculations to the data 
 RemapResultsTable <- left_join(RemapResultsTable, RemapCellCount, by = c("Mapping"))
@@ -405,17 +413,15 @@ RemapResultsTable$MST_dim_x <- scales::rescale(RemapResultsTable$MST_dim_x, to =
 RemapResultsTable$MST_dim_y <- scales::rescale(RemapResultsTable$MST_dim_y, to = c(0, 1000000))
 RemapResultsTable$tSNE_dim_x <- scales::rescale(RemapResultsTable$tSNE_dim_x, to = c(0, 1000000))
 RemapResultsTable$tSNE_dim_y <- scales::rescale(RemapResultsTable$tSNE_dim_y, to = c(0, 1000000))
-
 RemapResultsTable$Mapping <- scales::rescale(RemapResultsTable$Mapping, to = c(0, 1000000))
 RemapResultsTable$RemapCount <- scales::rescale(RemapResultsTable$RemapCount, to = c(0, 1000000))
 RemapResultsTable$OriginalCount <- scales::rescale(RemapResultsTable$OriginalCount, to = c(0, 1000000))
 RemapResultsTable$OriginalPercent <- scales::rescale(RemapResultsTable$OriginalPercent, to = c(0, 1000000))
-
 RemapResultsTable$FoldChange <- scales::rescale(RemapResultsTable$FoldChange, to = c(0, 1000000))
 
 ############ Convert the dataframe to fcs ##############
 input_data <- data.matrix(RemapResultsTable)  
-                   
+
 # Estimate vector of column names
 column_names = dimnames(input_data)[[2]]
 
@@ -510,7 +516,7 @@ input_data.ff <- new("flowFrame",
                      description=description_list
 )
 
-fcsfilename <- paste0("./in-out/Remap files/Results/", Sys.Date(), "_Remap_Clustered.fcs")
+fcsfilename <- paste0("./in-out/Remap files/Results/", Sys.Date(), " _(T1)_Ctrl_Remap_Clustered.fcs")
 
 ## Save flowframe as .fcs file
 write.FCS(input_data.ff, fcsfilename, endian = "little")
