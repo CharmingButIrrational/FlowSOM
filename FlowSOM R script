@@ -27,6 +27,7 @@ library(data.table)
 
 #Just for my convience 
 setwd("C:/Users/oisin/Desktop/Analysis Data/Flow. (Krause)/Flow-cytometry/Flow-cytometry")
+x <- "AML-H1 2017_1476 (-KO_H1 2017-1317)"
 
 
 ###Set the maximum value of parameters (Navios 2E20-1, BD Canto 2E18-1, Sysmex 2E8-1)
@@ -36,13 +37,13 @@ tagincrement <- parametermax/22
 tagincrement <- round (tagincrement, 0)
 
 #Set the marker columns of the file to be used for clustering
-ClusterCols <- (1:11)
-# clusternumber is the square root of the number of clusters
+ClusterCols <- (4:11)
+#Clusternumber is the square root of the number of clusters
 clusternumber <- 10
 
 ### Set the factor by which the number of samples in a FlowSom node will multipled by
 #Changes the size of the nodes. (Multiplier) * sqrt(Number of samples in node)
-# will be modified by adation in script
+#will be modified by adation in script
 tSNE_nodesize <- 0.06
 MST_nodesize <- 0.003
 Grid_nodesize <- 0.04
@@ -213,7 +214,7 @@ splitter <- function(x, output){
 mOutCoords <- lapply(MstCoords, splitter)
 tOutCoords <- lapply(tSNECoords, splitter)
 gOutCoords <- lapply(GridCoords, splitter)
-                     
+
 mAllCoords <- rbindlist(mOutCoords, idcol = "index")
 names(mAllCoords)[1] <- "Mapping"
 names(mAllCoords)[2] <- "MST_dim_x"
@@ -384,15 +385,15 @@ input_data.ff <- new("flowFrame",
                      description=description_list
 )
 
-# option 1: filename according to date
-fcsfilename <- paste0("./in-out/Results/", Sys.Date(), "_Clustered.fcs")
+#Option 1: Used for testing
+fcsfilename <- paste0("./in-out/Remap files/Results/Control Remapping/", x, "_Clustered.fcs")
 
-# option 2: filename according to original name
+#Option 2: filename according to original name
 #fcsfilename <- paste0("./in-out/Results/", list_of_input_short[1], "_FlowSom.fcs")
 
 ## Save flowframe as .fcs file
-#write.FCS(input_data.ff, fcsfilename, endian = "little")
-#write.csv2(list_of_input_short, "./in-out/Results/files_list.csv",row.names = FALSE)
+write.FCS(input_data.ff, fcsfilename, endian = "little")
+write.csv2(list_of_input_short, "./in-out/Remap files/Results/_files_list.csv",row.names = FALSE)
 
 #The new dataframe will be produced as a separate FCS file
 #Remap new data and compare with the previous AML sample
@@ -495,10 +496,9 @@ RemapResultsTable$grid_dim_x <- scales::rescale(RemapResultsTable$grid_dim_x, to
 RemapResultsTable$grid_dim_y <- scales::rescale(RemapResultsTable$grid_dim_y, to = c(0, parametermax))
 
 RemapResultsTable$Mapping <- scales::rescale(RemapResultsTable$Mapping, to = c(0, parametermax))
-RemapResultsTable$RemapCount <- scales::rescale(RemapResultsTable$RemapCount, to = c(0, parametermax))
-RemapResultsTable$OriginalCount <- scales::rescale(RemapResultsTable$OriginalCount, to = c(0, parametermax))
-RemapResultsTable$OriginalPercent <- scales::rescale(RemapResultsTable$OriginalPercent, to = c(0, parametermax))
-
+RemapResultsTable$`Count FU` <- scales::rescale(RemapResultsTable$`Count FU`, to = c(0, parametermax))
+RemapResultsTable$`Count D` <- scales::rescale(RemapResultsTable$`Count D`, to = c(0, parametermax))
+RemapResultsTable$PercentD <- scales::rescale(RemapResultsTable$PercentD, to = c(0, parametermax))
 RemapResultsTable$FoldChange <- scales::rescale(RemapResultsTable$FoldChange, to = c(0, parametermax))
 
 ############ Convert the dataframe to fcs ##############
@@ -598,9 +598,9 @@ input_data.ff <- new("flowFrame",
                      description=description_list
 )
 
-#Option 1 name by date processed
-fcsfilename <- paste0("./in-out/Remap files/Results/Control Remapping/", "ER_000001_H1 (KO_H1 2017-855)", "_Remap_Clustered.fcs")
-csvfilename <- paste0("./in-out/Remap files/Results/Control Remapping/", "ER_000001_H1 (KO_H1 2017-855)", "_MixingData.csv")
+#Option 1 used for testing
+fcsfilename <- paste0("./in-out/Remap files/Results/Control Remapping/", x, "_Remap_Clustered.fcs")
+csvfilename <- paste0("./in-out/Remap files/Results/Control Remapping/", x, "_MixingData.csv")
 
 #Option 2: filename according to original name
 #fcsfilename <- paste0("./in-out/Results/", list_of_input_short[1], "_FlowSom_remap.fcs")
@@ -614,6 +614,3 @@ write.csv(ControlFUMix, csvfilename)
 
 ###################################################################################
 
-#Control in FU sample 
-#Gating in R or Kaluza
-#Randomise the samples during input
